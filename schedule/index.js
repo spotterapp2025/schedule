@@ -4,13 +4,13 @@ import {MakeMacroReminder, MakeStepProgressReminder} from "./todo.js"
 
 
 const scheduleTime = {
-    Morning: "00 7 * * *",
+    Morning: "00 07 * * *",
     Lunch: "50 11 * * *",
     Dinner: '15 18 * * *'
 }
 
 // Example: Run at 6:45 AM every day
-const Morning = new CronJob('54 12 * * *', async () => {
+const Morning = new CronJob( scheduleTime.Morning , async () => {
   console.log('⏰ Time for breakfast soon!');
   await MakeMacroReminder(
     "☀️ Morning Check-in",
@@ -21,8 +21,8 @@ const Morning = new CronJob('54 12 * * *', async () => {
   );
 });
 
-const Lunch = new CronJob('54 12 * * *', async () => {
-  console.log('⏰ Time for breakfast soon!');
+const Lunch = new CronJob( scheduleTime.Lunch , async () => {
+  console.log('⏰ Time for Lunch soon!');
   await MakeMacroReminder(
     "🍱 Lunchtime Reminder",
     "It's lunch o'clock! Don’t forget to grab something tasty 🍛",
@@ -32,8 +32,8 @@ const Lunch = new CronJob('54 12 * * *', async () => {
     );
 });
 
-const Dinner = new CronJob('54 12 * * *', async () => {
-  console.log('⏰ Time for breakfast soon!');
+const Dinner = new CronJob( scheduleTime.Dinner , async () => {
+  console.log('⏰ Time for dinner soon!');
   await MakeMacroReminder(
     "🍽️ Dinner Time",
     "Evening’s here — time for dinner and to relax a bit 🌙",
