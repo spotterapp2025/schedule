@@ -1,29 +1,37 @@
 {
-  "name": "schedule",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "nodemon server.js"
-  },
-  "keywords": [],
+  "name": "spotter-schedule",
+  "version": "2.0.0",
+  "description": "Spotter background worker: time-zone-aware workout, step, meal, calorie and workout-partner push reminders.",
+  "private": true,
   "type": "module",
-  "author": "",
+  "main": "server.js",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "once": "node server.js --once",
+    "dry-run": "node server.js --once --dry-run",
+    "test": "node --test \"test/*.test.js\"",
+    "lint": "eslint .",
+    "typecheck": "tsc -p jsconfig.json",
+    "check": "npm run lint && npm run typecheck && npm test"
+  },
   "license": "ISC",
   "dependencies": {
-    "axios": "^1.9.0",
-    "cors": "^2.8.5",
     "cron": "^4.3.3",
     "dotenv": "^16.4.7",
-    "expo-server-sdk": "^3.2.0",
-    "express": "^4.21.2",
-    "express-jwt": "^8.5.1",
-    "express-rate-limit": "^7.5.0",
-    "minhluanlu-color-log": "^1.0.2",
-    "multer": "^1.4.5-lts.1",
-    "mysql": "^2.18.1",
-    "mysql2": "^3.11.5",
-    "nodemon": "^3.1.7"
+    "expo-server-sdk": "^3.15.0",
+    "luxon": "^3.7.2",
+    "mysql2": "^3.24.4"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@types/luxon": "^3.6.2",
+    "@types/node": "^22.0.0",
+    "eslint": "^9.39.0",
+    "globals": "^16.0.0",
+    "typescript": "~6.0.3"
   }
 }
