@@ -1,6 +1,6 @@
 // Push notification copy. Pure functions: easy to test and to change without touching SQL.
 // `data.type` must be one the app routes in App.js navigateFromPush.
-import { CALORIE_SUMMARY, PARTNER_DIGEST, normalizePreferredTime } from "./definitions.js";
+import { CALORIE_SUMMARY, MACRO_COMPLETION_RATIO, PARTNER_DIGEST, STREAK_LIMITS, STREAK_MILESTONES, normalizePreferredTime } from "./definitions.js";
 
 const format = (value) => Math.round(Number(value) || 0).toLocaleString("en-US");
 const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`;
@@ -102,4 +102,129 @@ export function partnerDigest({ pendingRequests, newLikes }) {
     body: `You have ${parts.join(" and ")} waiting. Say hi and plan a session together!`,
     data: { type: "notifications" },
   };
+}
+
+/// ---- Streaks ----
+// One message covers both streaks, so each stage (reminder, warning, celebration) reaches a user at most once a day.
+// Encouraging, never shaming. Every streak push opens the app's Streaks screen.
+const STREAK_LABELS = { steps: "step", macro: "nutrition" };
+const switchedOn = (value) => value === undefined || value === null || Number(value) === 1;
+
+/**
+ * Both streaks from an audience row. `length` is the streak including today when today is complete; `atRisk` means
+ * the streak ran through yesterday and today isn't complete yet. Mirrors api/streaks/streakRules.js requiredForGoal.
+ * @param {Record<string, any>} row @param {{today: string, yesterday: string}} dates
+ */
+export function streakSnapshot(row, { today, yesterday }) {
+  const one = (type, goalValue, progressValue, current, lastCompleted, stateAge, enabled) => {
+    const goal = positiveNumber(goalValue);
+    const required = goal ? Math.ceil(type === "macro" ? goal * MACRO_COMPLETION_RATIO : goal) : null;
+    const value = Math.max(0, Number(progressValue) || 0);
+    const completed = required !== null && value >= required;
+    const streak = Math.max(0, Math.trunc(Number(current) || 0));
+    // streakState may have been written before today was completed: then it still counts up to yesterday.
+    const throughYesterday = lastCompleted === yesterday && streak > 0;
+    const length = lastCompleted === today ? streak : throughYesterday ? streak + (completed ? 1 : 0) : completed ? 1 : 0;
+    return {
+      type,
+      enabled: switchedOn(enabled),
+      required,
+      value,
+      remaining: required === null ? null : Math.max(0, required - value),
+      completed,
+      atRisk: switchedOn(enabled) && required !== null && !completed && throughYesterday,
+      length,
+      stateAge: stateAge === null || stateAge === undefined ? null : Number(stateAge),
+    };
+  };
+  return {
+    steps: one("steps", row.stepGoal, row.steps, row.stepsStreak, row.stepsLastCompleted, row.stepsStateAge, row.stepStreakOn),
+    macro: one("macro", row.kcalTarget, row.eaten, row.macroStreak, row.macroLastCompleted, row.macroStateAge, row.macroStreakOn),
+  };
+}
+
+const streakData = (streaks) => ({ type: "streak", streak: streaks.length === 1 ? streaks[0].type : "all" });
+/** Extra information for limits.js; not sent. */
+const limitInfo = (streaks) => ({ topics: streaks.map((s) => s.type) });
+
+/** @param {Record<string, any>} row @param {{today: string, yesterday: string}} dates */
+export function streakReminder(row, dates) {
+  const { steps, macro } = streakSnapshot(row, dates);
+  const atRisk = [steps, macro].filter((s) => s.atRisk);
+  if (!atRisk.length) return null;
+  const base = { kind: "streak:reminder", data: streakData(atRisk), limit: limitInfo(atRisk) };
+  if (atRisk.length === 2) {
+    return {
+      ...base,
+      title: "🔥 Keep your streaks going",
+      body: `Your ${steps.length}-day step streak and ${macro.length}-day nutrition streak are waiting: ${format(steps.remaining)} steps to go and today's meals to log.`,
+    };
+  }
+  const [only] = atRisk;
+  if (only.type === "steps") {
+    return { ...base, title: "👟 Keep your step streak going", body: `You're on a ${only.length}-day step streak. ${format(only.remaining)} steps to go today.` };
+  }
+  return { ...base, title: "🥗 Keep your nutrition streak going", body: `You're on a ${only.length}-day nutrition streak. Log today's meals to keep it going.` };
+}
+
+/** @param {Record<string, any>} row @param {{today: string, yesterday: string}} dates */
+export function streakWarning(row, dates, minStreak = STREAK_LIMITS.warningMinStreak) {
+  const { steps, macro } = streakSnapshot(row, dates);
+  const atRisk = [steps, macro].filter((s) => s.atRisk && s.length >= minStreak);
+  if (!atRisk.length) return null;
+  const base = { kind: "streak:warning", data: streakData(atRisk), limit: limitInfo(atRisk) };
+  if (atRisk.length === 2) {
+    return {
+      ...base,
+      title: "⏳ Your streaks are waiting",
+      body: `A little more today keeps your ${steps.length}-day step streak and ${macro.length}-day nutrition streak going.`,
+    };
+  }
+  const [only] = atRisk;
+  if (only.type === "steps") {
+    const body =
+      only.value > 0
+        ? `You're close—${format(only.remaining)} steps left to keep your ${only.length}-day streak.`
+        : `There's still time for a walk today to keep your ${only.length}-day step streak.`;
+    return { ...base, title: "⏳ Your step streak is waiting", body };
+  }
+  return { ...base, title: "⏳ Your nutrition streak is waiting", body: `Complete today's meal log to protect your ${only.length}-day streak.` };
+}
+
+/**
+ * A streak of 2+ days that grew today, once the completion has settled. Milestone lengths get the milestone message
+ * when milestones are on (kind streak:milestone); otherwise the regular celebration when celebrations are on.
+ * @param {Record<string, any>} row @param {{today: string, yesterday: string}} dates
+ */
+export function streakCelebration(row, dates, settleMinutes = STREAK_LIMITS.celebrationSettleMinutes) {
+  const { steps, macro } = streakSnapshot(row, dates);
+  const settled = (s) => s.stateAge === null || s.stateAge >= settleMinutes;
+  const grew = [steps, macro].filter((s) => s.enabled && s.completed && s.length >= 2 && settled(s));
+  if (!grew.length) return null;
+
+  const milestones = switchedOn(row.milestones) ? grew.filter((s) => STREAK_MILESTONES.includes(s.length)) : [];
+  if (milestones.length) {
+    const top = Math.max(...milestones.map((s) => s.length));
+    const body =
+      milestones.length === 2
+        ? `Your ${steps.length}-day step streak and ${macro.length}-day nutrition streak are complete!`
+        : `Your ${milestones[0].length}-day ${STREAK_LABELS[milestones[0].type]} streak is complete!`;
+    return { kind: "streak:milestone", title: `🏅 ${top}-day milestone`, body, data: streakData(milestones), limit: limitInfo(milestones) };
+  }
+
+  if (!switchedOn(row.celebrations)) return null;
+  const base = { kind: "streak:celebrate", data: streakData(grew), limit: limitInfo(grew) };
+  if (grew.length === 2) {
+    return {
+      ...base,
+      title: "🔥 Both streaks grew today",
+      body: `${steps.length} days of step goals and ${macro.length} days of logged meals. Nice work!`,
+    };
+  }
+  const [only] = grew;
+  const body =
+    only.type === "steps"
+      ? `Step goal done today — your step streak is now ${only.length} days. Nice work!`
+      : `Meals logged today — your nutrition streak is now ${only.length} days. Nice work!`;
+  return { ...base, title: `🔥 ${only.length} days in a row`, body };
 }

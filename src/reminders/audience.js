@@ -4,21 +4,21 @@
 // - pages by userID (`AND u.userID > ? ORDER BY u.userID LIMIT ?`, always the last two parameters),
 // - starts with a /* tag */ comment so logs and tests can tell the queries apart.
 // All values go through `?` placeholders.
-import { PREFERENCE_COLUMNS } from "./definitions.js";
+import { PREFERENCE_COLUMNS, STREAK_LIMITS, STREAK_REMINDER } from "./definitions.js";
 
 const LATEST_PLAN = "workoutPlan wp ON wp.workoutID = (SELECT MAX(w2.workoutID) FROM workoutPlan w2 WHERE w2.userID = u.userID)";
 const PAGE = "AND u.userID > ? ORDER BY u.userID LIMIT ?";
 
 /**
- * @typedef {{userTimezone: boolean, settings: boolean, log: boolean, blocks: boolean}} Capabilities
+ * @typedef {{userTimezone: boolean, settings: boolean, log: boolean, blocks: boolean, streaks?: boolean}} Capabilities
  * @typedef {{caps: Capabilities, zoneValues: string[], defaultTimeZone: string}} AudienceContext
  */
 
-/** @param {AudienceContext} ctx @param {keyof typeof PREFERENCE_COLUMNS} preference */
+/** @param {AudienceContext} ctx @param {keyof typeof PREFERENCE_COLUMNS | null} preference */
 function base({ caps, zoneValues, defaultTimeZone }, preference) {
   const where = ["u.isComplete = 1"];
   const params = [];
-  if (caps.settings) where.push(`COALESCE(rs.${PREFERENCE_COLUMNS[preference]}, 1) = 1`);
+  if (caps.settings && preference) where.push(`COALESCE(rs.${PREFERENCE_COLUMNS[preference]}, 1) = 1`);
   if (caps.userTimezone) {
     where.push("COALESCE(NULLIF(TRIM(u.timezone), ''), ?) IN (?)");
     params.push(defaultTimeZone, zoneValues);
@@ -108,6 +108,88 @@ export const audienceQueries = {
         ORDER BY u.userID LIMIT ?`,
       params: [...b.params, cursor, limit],
     };
+  },
+};
+
+/**
+ * Both streaks per user in one row: switches, today's goal and progress, and the cached streak state (api
+ * streakState). `streakCondition(alias)` selects users with at least one enabled streak in the right state.
+ * Requires capabilities.streaks (which implies reminderSettings exists). Parameters are listed in SQL order.
+ */
+function streakAudience(tag, ctx, args, stageCondition, stageParams, streakCondition, streakParams, cursor, limit) {
+  const b = base(ctx, null);
+  return {
+    sql: `/* ${tag} */ SELECT ${b.columns},
+        COALESCE(rs.stepStreak, 1) AS stepStreakOn, COALESCE(rs.macroStreak, 1) AS macroStreakOn,
+        COALESCE(rs.streakCelebrations, 1) AS celebrations, COALESCE(rs.streakMilestones, 1) AS milestones,
+        wp.stepGoal, COALESCE(st.steps, 0) AS steps, mc.kcal AS kcalTarget,
+        (SELECT COALESCE(SUM(m.sumKcal), 0) FROM meals m WHERE m.userID = u.userID AND m.eatenAt >= ? AND m.eatenAt < ?) AS eaten,
+        sst.currentStreak AS stepsStreak, DATE_FORMAT(sst.lastCompletedDate, '%Y-%m-%d') AS stepsLastCompleted,
+        TIMESTAMPDIFF(MINUTE, sst.updatedAt, NOW()) AS stepsStateAge,
+        mst.currentStreak AS macroStreak, DATE_FORMAT(mst.lastCompletedDate, '%Y-%m-%d') AS macroLastCompleted,
+        TIMESTAMPDIFF(MINUTE, mst.updatedAt, NOW()) AS macroStateAge
+      FROM ${b.from}
+      LEFT JOIN streakState sst ON sst.userID = u.userID AND sst.streakType = 'steps'
+      LEFT JOIN streakState mst ON mst.userID = u.userID AND mst.streakType = 'macro'
+      LEFT JOIN ${LATEST_PLAN}
+      LEFT JOIN stepTracker st ON st.userID = u.userID AND st.date = ?
+      LEFT JOIN macro mc ON mc.macroID = (SELECT MAX(m2.macroID) FROM macro m2 WHERE m2.userID = u.userID)
+      WHERE ${b.where} AND ${stageCondition}
+        AND ((COALESCE(rs.stepStreak, 1) = 1 AND ${streakCondition("sst")}) OR (COALESCE(rs.macroStreak, 1) = 1 AND ${streakCondition("mst")}))
+      ${PAGE}`,
+    params: [args.start, args.end, args.localDate, ...b.params, ...stageParams, ...streakParams, ...streakParams, cursor, limit],
+  };
+}
+
+/**
+ * Streak notification audiences. Every `args` has localDate, yesterday, start and end (the local day on the DB
+ * clock); streakReminder also has `window`. An active streak's last completed day is yesterday. messages.js checks
+ * today's live progress, so a day completed after streakState was written cancels the reminder.
+ */
+export const streakAudienceQueries = {
+  /** At the user's own reminder time (streakReminderTime within args.window, in minutes after midnight). */
+  streakReminder(ctx, args, cursor, limit) {
+    return streakAudience(
+      "audience:streakReminder",
+      ctx,
+      args,
+      "COALESCE(rs.streakReminders, 1) = 1 AND (TIME_TO_SEC(CONCAT(COALESCE(rs.streakReminderTime, ?), ':00')) DIV 60) BETWEEN ? AND ?",
+      [STREAK_REMINDER.defaultTime, args.window.from, args.window.to],
+      (alias) => `${alias}.currentStreak > 0 AND ${alias}.lastCompletedDate = ?`,
+      [args.yesterday],
+      cursor,
+      limit
+    );
+  },
+
+  /** Evening warning, only for streaks long enough to be worth it. */
+  streakWarning(ctx, args, cursor, limit) {
+    return streakAudience(
+      "audience:streakWarning",
+      ctx,
+      args,
+      "COALESCE(rs.streakWarnings, 1) = 1",
+      [],
+      (alias) => `${alias}.currentStreak >= ? AND ${alias}.lastCompletedDate = ?`,
+      [STREAK_LIMITS.warningMinStreak, args.yesterday],
+      cursor,
+      limit
+    );
+  },
+
+  /** Streaks that continue today (last completed day is today or yesterday). */
+  streakCelebrate(ctx, args, cursor, limit) {
+    return streakAudience(
+      "audience:streakCelebrate",
+      ctx,
+      args,
+      "(COALESCE(rs.streakCelebrations, 1) = 1 OR COALESCE(rs.streakMilestones, 1) = 1)",
+      [],
+      (alias) => `${alias}.lastCompletedDate IN (?, ?)`,
+      [args.localDate, args.yesterday],
+      cursor,
+      limit
+    );
   },
 };
 

@@ -22,10 +22,12 @@ export async function createWorker(config, overrides = {}) {
   const capabilities = createCapabilities(db, { logger });
   await capabilities.refresh(); // fails fast if the database is unreachable
 
-  // A dry run must not write claims, or it would block today's real reminders.
-  const store = config.dryRun ? createMemoryClaimStore() : createClaimStore({ db, capabilities });
-  const sender = createPushSender({ expo, db, logger, dryRun: config.dryRun });
   const now = config.at ? () => config.at : () => new Date();
+  // A dry run must not write claims, or it would block today's real reminders. The memory store uses the worker's
+  // clock, so frequency limits in an --at simulation are measured at the simulated time.
+  const memory = createMemoryClaimStore({ now: () => now().getTime() });
+  const store = config.dryRun ? memory : createClaimStore({ db, capabilities, memory });
+  const sender = createPushSender({ expo, db, logger, dryRun: config.dryRun });
   const runner = createReminderRunner({ db, store, sender, logger, capabilities, config, now });
 
   const state = { startedAt: Date.now(), lastTickAt: null, lastTickOk: null, lastError: null, lastSummary: null };

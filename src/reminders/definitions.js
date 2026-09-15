@@ -1,5 +1,5 @@
 // What gets sent and when, on the user's local clock.
-import { isSlotDue, weekdayKey } from "../time.js";
+import { isSlotDue, minutesOfDay, parseClock, weekdayKey } from "../time.js";
 
 /** reminderSettings column that switches each reminder type on or off (missing row = on). */
 export const PREFERENCE_COLUMNS = {
@@ -31,6 +31,62 @@ export const WORKOUT_TIMES = { morning: "06:45", afternoon: "11:30", evening: "1
 
 export const CALORIE_SUMMARY = { kind: "calories:summary", time: "20:30" };
 export const PARTNER_DIGEST = { kind: "partners:weekly", time: "18:00", weekday: "SUN" };
+
+// Streak notifications (api migration 0008). Streaks are calculated by the API (api/streaks/streakRules.js) and
+// cached in streakState; these values must match that file (test/streaks.test.js checks).
+export const STREAK_TYPES = ["steps", "macro"];
+export const STREAK_MILESTONES = [3, 7, 14, 30, 50, 100];
+export const MACRO_COMPLETION_RATIO = 0.8;
+/** Daily reminder at the user's own time (reminderSettings.streakReminderTime), within this range. */
+export const STREAK_REMINDER = { defaultTime: "19:00", earliest: "06:00", latest: "22:00" };
+/** Evening "streak at risk" warning. */
+export const STREAK_WARNING = { time: "21:30" };
+/** Completed days are celebrated during these local hours (once settled, see STREAK_LIMITS). */
+export const STREAK_CELEBRATION_HOURS = { from: "07:00", until: "23:00" };
+
+/**
+ * How often streak notifications may reach one user (applied in limits.js). On top of this, one message covers both
+ * streaks, so a user gets at most one reminder, one warning and one celebration or milestone per day.
+ */
+export const STREAK_LIMITS = Object.freeze({
+  /** Streak reminders, warnings and celebrations per local day. Milestones don't count and are always sent. */
+  maxPerDay: 2,
+  /** No streak reminder or warning within this many minutes of any other push to the same user. */
+  minGapMinutes: 90,
+  /** The warning is skipped when the streak reminder went out less than this long ago. */
+  warningAfterReminderMinutes: 120,
+  /** Only streaks of at least this many days get the at-risk warning; shorter ones just get the reminder. */
+  warningMinStreak: 3,
+  /** Ordinary "your streak grew" celebrations at most once per this many days (milestones reset the clock too). */
+  celebrationEveryDays: 3,
+  /** Celebrate only once the day has been complete this long, so the push doesn't land while the app is still open. */
+  celebrationSettleMinutes: 30,
+  /** Regular step check-ins are skipped within this many minutes after a streak reminder or warning. */
+  stepCheckInGapMinutes: 90,
+});
+
+/**
+ * Streak checks due at this local time. Only run when the database has the streak tables (capabilities.streaks).
+ * - streakReminder: users whose reminder time falls in `window` (minutes after midnight; the last `graceMinutes`).
+ * - streakWarning: once, at STREAK_WARNING.time.
+ * - streakCelebrate: every tick during STREAK_CELEBRATION_HOURS; the reminder log and limits keep it rare.
+ * @param {import("luxon").DateTime} local
+ * @param {number} graceMinutes
+ */
+export function dueStreakChecks(local, graceMinutes) {
+  const due = [];
+  const minutes = minutesOfDay(local);
+  const earliest = parseClock(STREAK_REMINDER.earliest);
+  const latest = parseClock(STREAK_REMINDER.latest);
+  if (minutes >= earliest && minutes < latest + graceMinutes) {
+    due.push({ type: "streakReminder", window: { from: Math.max(earliest, minutes - graceMinutes + 1), to: Math.min(latest, minutes) } });
+  }
+  if (isSlotDue(local, STREAK_WARNING.time, graceMinutes)) due.push({ type: "streakWarning" });
+  if (minutes >= parseClock(STREAK_CELEBRATION_HOURS.from) && minutes < parseClock(STREAK_CELEBRATION_HOURS.until)) {
+    due.push({ type: "streakCelebrate" });
+  }
+  return due;
+}
 
 /** "morning" | "afternoon" | "evening" | "unset" (the app stores missing values as the text "null"). */
 export function normalizePreferredTime(value) {

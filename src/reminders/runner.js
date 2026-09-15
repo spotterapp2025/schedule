@@ -1,7 +1,17 @@
 // One scheduler tick: for each time zone with a reminder due, find the audience, claim, send, record.
-import { dueReminders } from "./definitions.js";
-import { audienceQueries, zoneQuery } from "./audience.js";
-import { calorieSummary, mealReminder, partnerDigest, stepReminder, workoutReminder } from "./messages.js";
+import { dueReminders, dueStreakChecks } from "./definitions.js";
+import { audienceQueries, streakAudienceQueries, zoneQuery } from "./audience.js";
+import { LIMIT_HISTORY_DAYS, applyLimits, isLimited } from "./limits.js";
+import {
+  calorieSummary,
+  mealReminder,
+  partnerDigest,
+  stepReminder,
+  streakCelebration,
+  streakReminder,
+  streakWarning,
+  workoutReminder,
+} from "./messages.js";
 import { isInQuietHours, localDateISO, localDayBoundsUtc, localTime, resolveZone, toDbClock, weekdayKey } from "../time.js";
 
 export const PAGE_SIZE = 1000;
@@ -46,6 +56,16 @@ export function createReminderRunner({ db, store, sender, logger, capabilities, 
       }
       case "partners":
         return { args: {}, build: (row) => partnerDigest(row) };
+      case "streakReminder":
+      case "streakWarning":
+      case "streakCelebrate": {
+        const dates = { today: localDateISO(local), yesterday: localDateISO(local.minus({ days: 1 })) };
+        const { start, end } = localDayBoundsUtc(local);
+        const args = { localDate: dates.today, yesterday: dates.yesterday, start: toDbClock(start, dbOffset), end: toDbClock(end, dbOffset), window: reminder.window };
+        const builders = { streakReminder, streakWarning, streakCelebrate: streakCelebration };
+        const buildStreak = builders[reminder.type];
+        return { args, build: (row) => buildStreak(row, dates) };
+      }
       default:
         throw new Error(`Unknown reminder type "${reminder.type}"`);
     }
@@ -74,12 +94,23 @@ export function createReminderRunner({ db, store, sender, logger, capabilities, 
     if (retry.length) await store.release(retry);
   }
 
+  /** Holds back candidates that would exceed the frequency limits (limits.js), counting them by reason. */
+  async function withinLimits(candidates, summary) {
+    const userIDs = candidates.filter((candidate) => isLimited(candidate.kind)).map((candidate) => candidate.userID);
+    if (!userIDs.length) return candidates;
+    const history = await store.recentHistory(userIDs, LIMIT_HISTORY_DAYS);
+    const { allowed, held } = applyLimits(candidates, history);
+    for (const { reason } of held) summary.limited[reason] = (summary.limited[reason] ?? 0) + 1;
+    return allowed;
+  }
+
   async function runReminder({ reminder, ctx, local, dbOffset, summary }) {
     const { args, build } = plan(reminder, local, dbOffset);
     const localDate = localDateISO(local);
     let cursor = 0;
     for (;;) {
-      const { sql, params } = audienceQueries[reminder.type](ctx, args, cursor, pageSize);
+      const query = audienceQueries[reminder.type] ?? streakAudienceQueries[reminder.type];
+      const { sql, params } = query(ctx, args, cursor, pageSize);
       const rows = await db.query(sql, params);
       if (!rows.length) break;
       cursor = rows[rows.length - 1].userID;
@@ -97,13 +128,15 @@ export function createReminderRunner({ db, store, sender, logger, capabilities, 
           token: row.token,
           kind: content.kind,
           localDate,
+          limit: content.limit,
           message: { title: content.title, body: content.body, data: content.data },
         });
       }
 
       summary.candidates += candidates.length;
-      const claimed = await store.claimMany(candidates);
-      summary.duplicates += candidates.length - claimed.length;
+      const sendable = await withinLimits(candidates, summary);
+      const claimed = await store.claimMany(sendable);
+      summary.duplicates += sendable.length - claimed.length;
       if (claimed.length) await settle(await sender.send(claimed), summary);
       if (rows.length < pageSize) break;
     }
@@ -112,7 +145,7 @@ export function createReminderRunner({ db, store, sender, logger, capabilities, 
   async function tick() {
     const caps = await capabilities.refreshIfStale();
     const at = now();
-    const summary = { at: at.toISOString(), store: store.kind, zonesDue: 0, candidates: 0, sent: 0, failed: 0, retry: 0, duplicates: 0, skippedQuiet: 0, errors: 0, byKind: {} };
+    const summary = { at: at.toISOString(), store: store.kind, zonesDue: 0, candidates: 0, sent: 0, failed: 0, retry: 0, duplicates: 0, skippedQuiet: 0, limited: {}, errors: 0, byKind: {} };
 
     let dbOffset = null;
     const getDbOffset = async () => {
@@ -125,7 +158,8 @@ export function createReminderRunner({ db, store, sender, logger, capabilities, 
 
     for (const [zone, zoneValues] of await zoneGroups(caps)) {
       const local = localTime(at, zone);
-      const due = dueReminders(local, config.graceMinutes);
+      const due = /** @type {any[]} */ (dueReminders(local, config.graceMinutes));
+      if (caps.streaks) due.push(...dueStreakChecks(local, config.graceMinutes));
       if (!due.length) continue;
       summary.zonesDue++;
       const ctx = { caps, zoneValues, defaultTimeZone: config.defaultTimeZone };

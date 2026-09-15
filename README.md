@@ -15,6 +15,27 @@ Times are the **user's local time**.
 | Workout day | 06:45 / 11:30 / 17:30 for a morning / afternoon / evening plan (08:00 if no preferred time) | Users whose workout plan includes today | Discover (find a partner) |
 | Calorie summary | 20:30 | Everyone: food eaten vs goal and calories burned, or a nudge if nothing was logged | Daily tracker |
 | Workout partners digest | Sundays 18:00 | Users with pending connection requests or new likes from the last 7 days (blocked users excluded) | Notifications |
+| Streak reminder | The user's reminder time (default 19:00, 06:00–22:00) | Users with an active streak (last completed day = yesterday) whose day isn't done yet. One message covers both streaks | Streaks screen |
+| Streak at risk | 21:30 | Streaks of 3+ days still not done today | Streaks screen |
+| Streak celebration / milestone | 30+ minutes after the day is completed (07:00–23:00) | Streaks of 2+ days that grew today; milestone copy at 3, 7, 14, 30, 50 and 100 days | Streaks screen |
+
+Streaks are calculated by the API (`api/streaks`) from step and meal logs and cached in `streakState`; the worker reads that cache plus today's live steps/meals, so a day completed after the cache was written still cancels its reminder. A step day counts at the step goal, a nutrition day at 80% of the calorie target. Streak notifications have their own switches (step / nutrition streak, reminders, warnings, celebrations, milestones) and start once api migration `0008_streaks` is applied.
+
+### Streak notification limits
+
+Streak pushes must help, not nag. `src/reminders/limits.js` checks each user's recent notifications (`reminderLog`) before anything is claimed; the numbers live in `STREAK_LIMITS` (`definitions.js`):
+
+| Rule | Why |
+| --- | --- |
+| One reminder, one warning and one celebration or milestone per day, each covering both streaks | Never a separate push per streak |
+| At most 2 streak pushes a day (milestones don't count) | A reminder and a warning is plenty; a late celebration waits for another day |
+| No streak reminder or warning within 90 min of any other push | Doesn't pile onto the dinner, workout or calorie reminders |
+| The warning needs a 3+ day streak and comes 2 h+ after the reminder | Short streaks and back-to-back nudges aren't worth a second push |
+| Ordinary celebrations at most every 3 days (milestones always, and they reset the clock) | Celebrating every single day stops meaning anything |
+| Celebrations wait 30 min after the day was completed | The app already celebrates in place while it's open |
+| The regular step check-in is skipped within 90 min after a streak reminder, and "Step goal reached" and a step streak celebration never both go out | No two step pushes about the same thing |
+
+Held-back notifications are counted per reason in the tick summary (`limited`).
 
 Every reminder:
 - **Is sent at most once per user per local day.** The weekly digest is once per week. This holds across restarts and multiple worker instances.
@@ -59,11 +80,10 @@ maintenance (every 15 min)
 - **Failures.** If Expo is unreachable, claims are released and the next tick retries within the grace period. A failing reminder type doesn't stop the others. Invalid or unregistered tokens are removed from `socketio`.
 - **Privacy.** Queries select only the columns needed; they never select `users.*` or passwords. Push tokens aren't written to logs.
 
-## Reminder settings and time zones: app and API work still needed
+## Reminder settings and time zones
 
-The database is ready, but the app doesn't write these values yet:
-- **`users.timezone`:** the app should send `Intl.DateTimeFormat().resolvedOptions().timeZone` after sign-in, for example as part of the profile update.
-- **`reminderSettings`:** a Settings screen with switches for each reminder type and quiet hours (`HH:mm`), plus an API endpoint to read and update the row. A missing row means everything is on.
+- **`users.timezone`:** the app sends the device time zone (`PUT /v1/user/:userID/timezone`) when Home or the Daily Tracker opens.
+- **`reminderSettings`:** Settings → Streak notifications edits the streak switches, the reminder time and quiet hours (`GET/PUT /v1/streaks/user/:userID/preferences`). Quiet hours apply to every reminder. The meal, step, workout, calorie and partner switches have no screen yet; a missing row means everything is on.
 
 ## Development
 
