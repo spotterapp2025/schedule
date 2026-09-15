@@ -1,6 +1,6 @@
 // Detects which reminder features the database supports, so the worker runs before and after the
 // api migration 0005_reminders is applied. Re-checked hourly: no restart needed once it's applied.
-const NONE = Object.freeze({ userTimezone: false, settings: false, log: false, blocks: false, streaks: false });
+const NONE = Object.freeze({ userTimezone: false, settings: false, log: false, blocks: false, streaks: false, workoutCheckIn: false });
 
 /**
  * @param {{query: (sql: string, params?: unknown[]) => Promise<any>}} db
@@ -15,7 +15,7 @@ export function createCapabilities(db, { logger, refreshMs = 60 * 60 * 1000, now
       `/* capabilities */ SELECT TABLE_NAME AS tableName, COLUMN_NAME AS columnName
        FROM information_schema.COLUMNS
        WHERE TABLE_SCHEMA = DATABASE()
-         AND (TABLE_NAME IN ('reminderSettings', 'reminderLog', 'blocks', 'streakState') OR (TABLE_NAME = 'users' AND COLUMN_NAME = 'timezone'))`
+         AND (TABLE_NAME IN ('reminderSettings', 'reminderLog', 'blocks', 'streakState', 'workoutCompletions') OR (TABLE_NAME = 'users' AND COLUMN_NAME = 'timezone'))`
     );
     const tables = new Set(rows.map((row) => row.tableName));
     const next = {
@@ -25,6 +25,9 @@ export function createCapabilities(db, { logger, refreshMs = 60 * 60 * 1000, now
       blocks: tables.has("blocks"),
       // api migration 0008: streak state plus the streak columns on reminderSettings.
       streaks: tables.has("streakState") && rows.some((row) => row.tableName === "reminderSettings" && row.columnName === "streakReminderTime"),
+      // api migrations 0009 + 0010: workout completions and the "Did you work out today?" settings.
+      workoutCheckIn:
+        tables.has("workoutCompletions") && rows.some((row) => row.tableName === "reminderSettings" && row.columnName === "workoutCheckInTime"),
     };
     if (!caps || JSON.stringify(caps) !== JSON.stringify(next)) {
       logger?.info("Database reminder features", next);

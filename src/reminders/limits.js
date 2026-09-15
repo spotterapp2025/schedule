@@ -1,7 +1,9 @@
 // Frequency limits: applied after messages are built and before they're claimed, using what each user already received
 // recently (reminderLog, or the in-memory store). Keeps streak notifications from piling on top of each other and on
 // top of the regular reminders. Pure functions: the runner loads the history.
-import { STREAK_LIMITS } from "./definitions.js";
+import { STREAK_LIMITS, WORKOUT_CHECK_IN } from "./definitions.js";
+
+const WORKOUT_CHECK_IN_KIND = WORKOUT_CHECK_IN.kind;
 
 /** Days of history limitReason needs. */
 export const LIMIT_HISTORY_DAYS = STREAK_LIMITS.celebrationEveryDays;
@@ -13,7 +15,7 @@ const STEP_CHECK_IN = /^steps:(morning|afternoon|evening)$/;
 
 /** Whether a kind is subject to a limit (so the runner only loads history when it matters). */
 export function isLimited(kind) {
-  return STREAK_DAILY.has(kind) || CELEBRATIONS.has(kind) || STEP_CHECK_IN.test(kind) || kind === "steps:goal";
+  return STREAK_DAILY.has(kind) || CELEBRATIONS.has(kind) || STEP_CHECK_IN.test(kind) || kind === "steps:goal" || kind === WORKOUT_CHECK_IN_KIND;
 }
 
 /**
@@ -42,6 +44,8 @@ export function limitReason(candidate, history, limits = STREAK_LIMITS) {
   }
   if (STEP_CHECK_IN.test(kind) && within(limits.stepCheckInGapMinutes, (entry) => STREAK_NUDGES.has(entry.kind))) return "streak-reminder-recent";
   if (kind === "steps:goal" && today.some((entry) => CELEBRATIONS.has(entry.kind))) return "streak-celebrated";
+  // Held back, then sent later in its window once the gap has passed.
+  if (kind === WORKOUT_CHECK_IN_KIND && within(limits.workoutCheckInGapMinutes, () => true)) return "recent-push";
   return null;
 }
 

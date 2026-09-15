@@ -15,6 +15,7 @@ Times are the **user's local time**.
 | Workout day | 06:45 / 11:30 / 17:30 for a morning / afternoon / evening plan (08:00 if no preferred time) | Users whose workout plan includes today | Discover (find a partner) |
 | Calorie summary | 20:30 | Everyone: food eaten vs goal and calories burned, or a nudge if nothing was logged | Daily tracker |
 | Workout partners digest | Sundays 18:00 | Users with pending connection requests or new likes from the last 7 days (blocked users excluded) | Notifications |
+| "Did you work out today?" | The user's check-in time (default 20:00, 06:00–22:30; Profile or Workout calendar) | Users whose plan includes today, with the reminder on and today not yet marked as completed. Waits 20 min after any other push | Workout calendar |
 | Streak reminder | The user's reminder time (default 19:00, 06:00–22:00) | Users with an active streak (last completed day = yesterday) whose day isn't done yet. One message covers both streaks | Streaks screen |
 | Streak at risk | 21:30 | Streaks of 3+ days still not done today | Streaks screen |
 | Streak celebration / milestone | 30+ minutes after the day is completed (07:00–23:00) | Streaks of 2+ days that grew today; milestone copy at 3, 7, 14, 30, 50 and 100 days | Streaks screen |

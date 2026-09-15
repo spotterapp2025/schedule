@@ -1,6 +1,6 @@
 // One scheduler tick: for each time zone with a reminder due, find the audience, claim, send, record.
-import { dueReminders, dueStreakChecks } from "./definitions.js";
-import { audienceQueries, streakAudienceQueries, zoneQuery } from "./audience.js";
+import { dueReminders, dueStreakChecks, dueWorkoutCheckIns } from "./definitions.js";
+import { audienceQueries, streakAudienceQueries, workoutAudienceQueries, zoneQuery } from "./audience.js";
 import { LIMIT_HISTORY_DAYS, applyLimits, isLimited } from "./limits.js";
 import {
   calorieSummary,
@@ -10,6 +10,7 @@ import {
   streakCelebration,
   streakReminder,
   streakWarning,
+  workoutCheckIn,
   workoutReminder,
 } from "./messages.js";
 import { isInQuietHours, localDateISO, localDayBoundsUtc, localTime, resolveZone, toDbClock, weekdayKey } from "../time.js";
@@ -66,6 +67,11 @@ export function createReminderRunner({ db, store, sender, logger, capabilities, 
         const buildStreak = builders[reminder.type];
         return { args, build: (row) => buildStreak(row, dates) };
       }
+      case "workoutCheckIn": {
+        const localDate = localDateISO(local);
+        const weekStart = localDateISO(local.minus({ days: local.weekday - 1 })); // Monday (luxon: 1 = Monday)
+        return { args: { weekday: reminder.weekday, localDate, weekStart, window: reminder.window }, build: (row) => workoutCheckIn(row) };
+      }
       default:
         throw new Error(`Unknown reminder type "${reminder.type}"`);
     }
@@ -109,7 +115,7 @@ export function createReminderRunner({ db, store, sender, logger, capabilities, 
     const localDate = localDateISO(local);
     let cursor = 0;
     for (;;) {
-      const query = audienceQueries[reminder.type] ?? streakAudienceQueries[reminder.type];
+      const query = audienceQueries[reminder.type] ?? streakAudienceQueries[reminder.type] ?? workoutAudienceQueries[reminder.type];
       const { sql, params } = query(ctx, args, cursor, pageSize);
       const rows = await db.query(sql, params);
       if (!rows.length) break;
@@ -160,6 +166,7 @@ export function createReminderRunner({ db, store, sender, logger, capabilities, 
       const local = localTime(at, zone);
       const due = /** @type {any[]} */ (dueReminders(local, config.graceMinutes));
       if (caps.streaks) due.push(...dueStreakChecks(local, config.graceMinutes));
+      if (caps.workoutCheckIn) due.push(...dueWorkoutCheckIns(local, config.graceMinutes));
       if (!due.length) continue;
       summary.zonesDue++;
       const ctx = { caps, zoneValues, defaultTimeZone: config.defaultTimeZone };

@@ -4,7 +4,7 @@
 // - pages by userID (`AND u.userID > ? ORDER BY u.userID LIMIT ?`, always the last two parameters),
 // - starts with a /* tag */ comment so logs and tests can tell the queries apart.
 // All values go through `?` placeholders.
-import { PREFERENCE_COLUMNS, STREAK_LIMITS, STREAK_REMINDER } from "./definitions.js";
+import { PREFERENCE_COLUMNS, STREAK_LIMITS, STREAK_REMINDER, WORKOUT_CHECK_IN } from "./definitions.js";
 
 const LATEST_PLAN = "workoutPlan wp ON wp.workoutID = (SELECT MAX(w2.workoutID) FROM workoutPlan w2 WHERE w2.userID = u.userID)";
 const PAGE = "AND u.userID > ? ORDER BY u.userID LIMIT ?";
@@ -190,6 +190,31 @@ export const streakAudienceQueries = {
       cursor,
       limit
     );
+  },
+};
+
+export const workoutAudienceQueries = {
+  /**
+   * "Did you work out today?": today is a planned workout day, the check-in is on and its time is in args.window, and
+   * today isn't marked as completed. Includes this week's completed workouts for the message.
+   * Requires capabilities.workoutCheckIn (which implies reminderSettings exists).
+   */
+  workoutCheckIn(ctx, { weekday, localDate, weekStart, window }, cursor, limit) {
+    const b = base(ctx, null);
+    const titleCase = weekday.charAt(0) + weekday.slice(1).toLowerCase();
+    return {
+      sql: `/* audience:workoutCheckIn */ SELECT ${b.columns}, wp.frequency AS goal,
+          (SELECT COUNT(*) FROM workoutCompletions wc WHERE wc.userID = u.userID AND wc.workoutDate BETWEEN ? AND ?) AS completedThisWeek
+        FROM ${b.from}
+        JOIN ${LATEST_PLAN}
+        WHERE ${b.where}
+        AND COALESCE(rs.workoutCheckIn, 1) = 1
+        AND (TIME_TO_SEC(CONCAT(COALESCE(rs.workoutCheckInTime, ?), ':00')) DIV 60) BETWEEN ? AND ?
+        AND (JSON_CONTAINS(wp.workoutDays, JSON_QUOTE(?)) OR JSON_CONTAINS(wp.workoutDays, JSON_QUOTE(?)))
+        AND NOT EXISTS (SELECT 1 FROM workoutCompletions done WHERE done.userID = u.userID AND done.workoutDate = ?)
+        ${PAGE}`,
+      params: [weekStart, localDate, ...b.params, WORKOUT_CHECK_IN.defaultTime, window.from, window.to, weekday, titleCase, localDate, cursor, limit],
+    };
   },
 };
 

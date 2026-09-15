@@ -63,7 +63,29 @@ export const STREAK_LIMITS = Object.freeze({
   celebrationSettleMinutes: 30,
   /** Regular step check-ins are skipped within this many minutes after a streak reminder or warning. */
   stepCheckInGapMinutes: 90,
+  /** The "Did you work out today?" check-in waits this long after any other push (and is sent later in its window). */
+  workoutCheckInGapMinutes: 20,
 });
+
+/**
+ * "Did you work out today?" on the user's planned workout days (workoutPlan.workoutDays) at their own time
+ * (reminderSettings.workoutCheckInTime), skipped once today is marked as completed. Api migrations 0009 and 0010.
+ */
+export const WORKOUT_CHECK_IN = { kind: "workout:check-in", defaultTime: "20:00", earliest: "06:00", latest: "22:30" };
+
+/**
+ * The check-in is due for users whose time falls in `window` (minutes after midnight; the last `graceMinutes`), so a
+ * restarted worker or a held-back reminder still goes out. The reminder log sends it once per day.
+ * @param {import("luxon").DateTime} local
+ * @param {number} graceMinutes
+ */
+export function dueWorkoutCheckIns(local, graceMinutes) {
+  const minutes = minutesOfDay(local);
+  const earliest = parseClock(WORKOUT_CHECK_IN.earliest);
+  const latest = parseClock(WORKOUT_CHECK_IN.latest);
+  if (minutes < earliest || minutes >= latest + graceMinutes) return [];
+  return [{ type: "workoutCheckIn", weekday: weekdayKey(local), window: { from: Math.max(earliest, minutes - graceMinutes + 1), to: Math.min(latest, minutes) } }];
+}
 
 /**
  * Streak checks due at this local time. Only run when the database has the streak tables (capabilities.streaks).

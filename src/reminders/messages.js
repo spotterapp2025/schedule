@@ -1,6 +1,14 @@
 // Push notification copy. Pure functions: easy to test and to change without touching SQL.
 // `data.type` must be one the app routes in App.js navigateFromPush.
-import { CALORIE_SUMMARY, MACRO_COMPLETION_RATIO, PARTNER_DIGEST, STREAK_LIMITS, STREAK_MILESTONES, normalizePreferredTime } from "./definitions.js";
+import {
+  CALORIE_SUMMARY,
+  MACRO_COMPLETION_RATIO,
+  PARTNER_DIGEST,
+  STREAK_LIMITS,
+  STREAK_MILESTONES,
+  WORKOUT_CHECK_IN,
+  normalizePreferredTime,
+} from "./definitions.js";
 
 const format = (value) => Math.round(Number(value) || 0).toLocaleString("en-US");
 const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`;
@@ -104,7 +112,23 @@ export function partnerDigest({ pendingRequests, newLikes }) {
   };
 }
 
-/// ---- Streaks ----
+/**
+ * "Did you work out today?" — opens the Workout Calendar, where today's workout can be marked as completed.
+ * @param {{goal?: number|string|null, completedThisWeek?: number|string|null}} row
+ */
+export function workoutCheckIn({ goal, completedThisWeek }) {
+  const target = positiveNumber(goal);
+  const done = Math.max(0, Math.trunc(Number(completedThisWeek) || 0));
+  const weekly = target ? ` You've logged ${done} of ${Math.min(7, Math.round(target))} workouts this week.` : "";
+  return {
+    kind: WORKOUT_CHECK_IN.kind,
+    title: "💪 Did you work out today?",
+    body: `Tap to mark today's workout as completed.${weekly}`,
+    data: { type: "workout-check-in" },
+  };
+}
+
+// ---- Streaks ----
 // One message covers both streaks, so each stage (reminder, warning, celebration) reaches a user at most once a day.
 // Encouraging, never shaming. Every streak push opens the app's Streaks screen.
 const STREAK_LABELS = { steps: "step", macro: "nutrition" };
