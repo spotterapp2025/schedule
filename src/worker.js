@@ -9,6 +9,8 @@ import { createClaimStore, createMemoryClaimStore } from "./reminders/claims.js"
 import { createReminderRunner } from "./reminders/runner.js";
 import { createPushSender } from "./push/sender.js";
 import { checkReceipts } from "./push/receipts.js";
+import { createLinkExpiryJob } from "./mealPlanShares/linkExpiry.js";
+import { createChallengeJob } from "./challenges/challengeJob.js";
 
 // A tick runs every 5 minutes by default; no successful tick for this long means something is wrong.
 const STALE_AFTER_MS = 20 * 60 * 1000;
@@ -29,6 +31,21 @@ export async function createWorker(config, overrides = {}) {
   const store = config.dryRun ? memory : createClaimStore({ db, capabilities, memory });
   const sender = createPushSender({ expo, db, logger, dryRun: config.dryRun });
   const runner = createReminderRunner({ db, store, sender, logger, capabilities, config, now });
+  // Share Meal Plan: tell owners when a QR code expires or reaches its usage limit.
+  const linkExpiry = createLinkExpiryJob({ db, sender, logger, capabilities, now, dryRun: config.dryRun });
+
+  async function runMealPlanLinkExpiry() {
+    await capabilities.refreshIfStale();
+    return linkExpiry.run();
+  }
+
+  // Challenges: started, milestone and completed notices, and final results.
+  const challengeJob = createChallengeJob({ db, sender, logger, capabilities, now, dryRun: config.dryRun, defaultTimeZone: config.defaultTimeZone });
+
+  async function runChallenges() {
+    await capabilities.refreshIfStale();
+    return challengeJob.run();
+  }
 
   const state = { startedAt: Date.now(), lastTickAt: null, lastTickOk: null, lastError: null, lastSummary: null };
 
@@ -74,12 +91,16 @@ export async function createWorker(config, overrides = {}) {
   return {
     runTick,
     runMaintenance,
+    runMealPlanLinkExpiry,
+    runChallenges,
     status,
     start() {
       jobs = startJobs(
         [
           { name: "reminders", cronTime: config.tickCron, run: runTick },
           { name: "maintenance", cronTime: config.maintenanceCron, run: runMaintenance },
+          { name: "meal-plan-qr-expiry", cronTime: config.tickCron, run: runMealPlanLinkExpiry },
+          { name: "challenges", cronTime: config.tickCron, run: runChallenges },
         ],
         logger
       );

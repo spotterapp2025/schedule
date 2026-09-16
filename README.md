@@ -19,6 +19,12 @@ Times are the **user's local time**.
 | Streak reminder | The user's reminder time (default 19:00, 06:00–22:00) | Users with an active streak (last completed day = yesterday) whose day isn't done yet. One message covers both streaks | Streaks screen |
 | Streak at risk | 21:30 | Streaks of 3+ days still not done today | Streaks screen |
 | Streak celebration / milestone | 30+ minutes after the day is completed (07:00–23:00) | Streaks of 2+ days that grew today; milestone copy at 3, 7, 14, 30, 50 and 100 days | Streaks screen |
+| Challenge started | Once, when a challenge begins (08:00–21:00 in the challenge's time zone) | Everyone who joined | The challenge |
+| Challenge milestone | When a participant's progress reaches 50% and 100% of the target (08:00–21:00) — each at most once per challenge | That participant only | The challenge |
+| Challenge finished | After the last day (08:00–21:00): results are frozen (rank, winner, progress) once | Everyone who joined: won / shared first place / finished #N with the winner | The challenge |
+| Meal plan QR code expired / limit reached | Within 5 minutes of it happening (any time) | The owner of a meal plan that is still shared, once per QR code; also saved on the Notifications screen. The API already refuses the code the moment it expires | Shared meal plans |
+
+Nutrition challenge progress counts calories imported from Apple Health / Health Connect (the `healthDays` table from api migration 0017) as well as logged meals — the higher of the two per day. Before that migration runs, only meals count.
 
 Streaks are calculated by the API (`api/streaks`) from step and meal logs and cached in `streakState`; the worker reads that cache plus today's live steps/meals, so a day completed after the cache was written still cancels its reminder. A step day counts at the step goal, a nutrition day at 80% of the calorie target. Streak notifications have their own switches (step / nutrition streak, reminders, warnings, celebrations, milestones) and start once api migration `0008_streaks` is applied.
 
